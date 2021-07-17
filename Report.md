@@ -13,6 +13,9 @@ Run the next code cell to install a few packages.  This line will take a few min
 !pip -q install ./python
 ```
 
+    [31mtensorflow 1.7.1 has requirement numpy>=1.13.3, but you'll have numpy 1.12.1 which is incompatible.[0m
+    [31mipython 6.5.0 has requirement prompt-toolkit<2.0.0,>=1.0.15, but you'll have prompt-toolkit 3.0.19 which is incompatible.[0m
+
 
 The environment is already saved in the Workspace and can be accessed at the file path provided below. 
 
@@ -93,9 +96,14 @@ print('The state for the all agents looks like:', states)
 
 ### 3. The RL agent 
 
-The agent can be found in the file ddpg_agent.py, which implements a standard DDPG with some adjustments that can be seen in the hyperparameters setup. 
+The agent implements a standard Deep Deterministic Policy Gradiant [(DDPG)](https://arxiv.org/abs/1509.02971) which is an extension of the widely known DQN algorithm to work with continuous spaces by implementing an actor critic architecture. The details of the implementation can be found in the file ddpg_agent.py.
 
-Something important to mention is that during the first episodes we perform random actions instead of following the actor. The reason of this is to pretrain the model with highly explorative data in order to ensure a good training.
+The agent consist of 2 actors and 2 critics, corresponding to the local and target models in the DDPG algorithm.
+All of these have a similar structure of 3 fully connected layers with ReLu activations. There are some details. like dropout or batch normalization that has been optionally added to the model as it can be seen in model.py.
+
+Another important aspect is that the number of hidden units of the critic depends on the number of agents, which could be 1 in the case we want to use the same agent for both player, or 2 if we want to have different actors and critics for each player while keeping centralized learning in the critic.
+
+The basic actor critic agent is implemented in ac_agent.py while the learning algorithm of DDPG is implemented in a derived class in ddpg_agent.py. This approach allows us to easily extend the basic AC agent to other implementations.
 
 
 ```python
@@ -113,7 +121,6 @@ def run_agent(agent, noise=True, n_episodes=1000, random_episodes=1000, max_t=10
     for i_episode in keep_awake(range(1, n_episodes+1)):
         env_info = env.reset(train_mode=True)[brain_name]      # reset the environment    
         states = env_info.vector_observations                  # get the current state (for each agent)
-#         agent.reset()
         score = np.zeros(2)
         for t in range(max_t):
             if i_episode < random_episodes:
@@ -128,8 +135,7 @@ def run_agent(agent, noise=True, n_episodes=1000, random_episodes=1000, max_t=10
             agent.step(states, actions, rewards, next_states, dones)
             states = next_states
             score += rewards
-#             if sum(rewards)>0.0001:
-#                 print('\nI hit the ball! {:.2f}'. format(max(rewards)))
+
             if np.any(dones):
                 break 
         scores.append(max(score))
@@ -155,7 +161,13 @@ def plot_scores(scores):
 
 ### 4. Set up agent hyperparameters
 
-The default hyper parameters are set in the following config. In this case epsilon referes to the scale and decay rate of the OU noise.
+The default hyper parameters are set in the following config.  
+As it can be seen, the choice for th elayer size is 128, which the possibility to add batch normalization and dropout, although they are disabled by default.
+
+The epsilons and sigma entries refer to the scale, decay rate and deviation of the OU noise.
+Alpha and beta correspond to the hyperparameters of prioritized experience replay.
+
+Something worth mention is that the batch size has been heavily incremented to 1024 in order to accumulate interesting transitions during the exploration phase explained in the next section.
 
 
 ```python
@@ -170,6 +182,8 @@ def default_config():
 ```
 
 ### 5. Train the agent and visualize reward
+
+One key issue that it was observed during training is that the agent was not exploring properly the space with the randomly initialized actor. That was leading to the agent never hitting the ball, and therefore, not learning at all. In order to address that during the first episodes we perform random actions instead of following the actor, as we can see in the function run_agent. The reason of this is to pretrain the model with highly explorative data in order to ensure a good training.
 
 
 ```python
@@ -203,8 +217,121 @@ plot_scores(scores)
     
 
 
-### 6. Future Work
-As a future work it could be interesting to try a natural extension of DDPG which would be the Twin Delayed DDPG (TD3) or the Multiple Agents DDPG (MADDPG)
+### 6. Other approaches
+
+We also tried to implement prioritized experience replay with DDPG (PER DDPG) and MADDPG. The details of the implementation can be found in per_ddpg_agent.py and maddpg_agent.py.
+
+#### PER DDPG
+
+As we can see the introduction of the experience replay improves the average score right after the exploration phase, however this dos not speed up the training at the end (the environment is solved in the smae number of episodes!).    
+Most likely we could find a set of parameters that better exploits this early advantage of PER, but due to the significant increase of runtime, and the success of vanilla DDPG, the previous method seems preferable.
+
+
+```python
+from per_ddpg_agent import PDDPG
+            
+config = default_config()
+config.batch_size = 1024
+config.bn_active = True
+pddpg = PDDPG(state_size, action_size, config)
+scores = run_agent(pddpg, n_episodes=5000, random_episodes = 500)
+plot_scores(scores)
+```
+
+    Setting up Prioritized Experience Replay...
+    Episode 100	Average Score: 0.01
+    Episode 200	Average Score: 0.02
+    Episode 300	Average Score: 0.02
+    Episode 400	Average Score: 0.01
+    Episode 500	Average Score: 0.02
+    Episode 600	Average Score: 0.05
+    Episode 700	Average Score: 0.06
+    Episode 800	Average Score: 0.08
+    Episode 900	Average Score: 0.14
+    Episode 1000	Average Score: 0.14
+    Episode 1100	Average Score: 0.27
+    Problem solved in 1143 episodes!	Average Score: 0.50
+
+
+
+    
+![png](output_16_1.png)
+    
+
+
+#### MADPPG
+
+In this case we solved the problem much later than with DDPG. One potential reason is that the number of randome episodes should have been increased due to the fact that now we have to train 2 agents instead of 1.
+Therefore a more refined choice of hyperparameter could bring us closer to the results observed in DDPG
+
+
+```python
+from maddpg_agent import MADDPG
+
+config = default_config()
+config.batch_size = 1024
+maddpg = MADDPG(state_size, action_size, config)
+scores = run_agent(maddpg, n_episodes=5000, random_episodes = 500)
+plot_scores(scores)
+```
+
+    Episode 100	Average Score: 0.02
+    Episode 200	Average Score: 0.02
+    Episode 300	Average Score: 0.02
+    Episode 400	Average Score: 0.03
+    Episode 500	Average Score: 0.02
+    Episode 600	Average Score: 0.00
+    Episode 700	Average Score: 0.00
+    Episode 800	Average Score: 0.00
+    Episode 900	Average Score: 0.01
+    Episode 1000	Average Score: 0.01
+    Episode 1100	Average Score: 0.08
+    Episode 1200	Average Score: 0.06
+    Episode 1300	Average Score: 0.05
+    Episode 1400	Average Score: 0.04
+    Episode 1500	Average Score: 0.07
+    Episode 1600	Average Score: 0.05
+    Episode 1700	Average Score: 0.07
+    Episode 1800	Average Score: 0.05
+    Episode 1900	Average Score: 0.04
+    Episode 2000	Average Score: 0.09
+    Episode 2100	Average Score: 0.09
+    Episode 2200	Average Score: 0.08
+    Episode 2300	Average Score: 0.08
+    Episode 2400	Average Score: 0.07
+    Episode 2500	Average Score: 0.08
+    Episode 2600	Average Score: 0.08
+    Episode 2700	Average Score: 0.08
+    Episode 2800	Average Score: 0.08
+    Episode 2900	Average Score: 0.09
+    Episode 3000	Average Score: 0.08
+    Episode 3100	Average Score: 0.08
+    Episode 3200	Average Score: 0.06
+    Episode 3300	Average Score: 0.07
+    Episode 3400	Average Score: 0.08
+    Episode 3500	Average Score: 0.10
+    Episode 3600	Average Score: 0.12
+    Episode 3700	Average Score: 0.11
+    Episode 3800	Average Score: 0.11
+    Episode 3900	Average Score: 0.15
+    Episode 4000	Average Score: 0.28
+    Episode 4100	Average Score: 0.21
+    Episode 4200	Average Score: 0.34
+    Episode 4300	Average Score: 0.31
+    Episode 4400	Average Score: 0.40
+    Problem solved in 4480 episodes!	Average Score: 0.50
+
+
+
+    
+![png](output_18_1.png)
+    
+
+
+### 7. Future Work
+As a future work it could be interesting to try a natural extension of DDPG which would be the Twin Delayed DDPG (TD3).    
+
+Another possibility would be to try to refine a better hyperparameter set by changing the size of the model, observing the effect of dropout in learning or try different model architectures.
 
 
 ```python

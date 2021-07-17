@@ -4,6 +4,9 @@ from per_buffer import PERBuffer
 import numpy as np
 
 class PDDPG(DDPG):
+    def __init__(self, state_size, action_size, config):
+        super().__init__(state_size, action_size, config)
+        self.alg = 'pddpg'
            
     def init_replay_buffer(self):
         print('Setting up Prioritized Experience Replay...')
